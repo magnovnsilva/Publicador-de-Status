@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -42,6 +43,7 @@ data class StatusHdUiState(
     val isGeneratingDemo: Boolean = false,
     val previewProcessedOutput: Boolean = false,
     val showPipelineInspector: Boolean = false,
+    val autoShareAfterEncoding: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -53,6 +55,7 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
     val uiState: StateFlow<StatusHdUiState> = _uiState.asStateFlow()
 
     private var activeEncodingJob: Job? = null
+    private var pendingSaveAsVideo: EncodedOutputVideo? = null
 
     init {
         refreshGalleryHistory()
@@ -61,7 +64,12 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
     fun refreshGalleryHistory() {
         viewModelScope.launch {
             val history = processor.loadSavedStatusHdVideos()
-            _uiState.update { it.copy(savedGalleryVideos = history) }
+            _uiState.update { state ->
+                state.copy(
+                    savedGalleryVideos = history,
+                    latestEncodedVideo = state.latestEncodedVideo ?: history.firstOrNull()
+                )
+            }
         }
     }
 
@@ -169,7 +177,10 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(showPipelineInspector = !it.showPipelineInspector) }
     }
 
-    fun startVenlowEncoding() {
+    fun startVenlowEncoding(
+        context: Context? = null,
+        shareDirectlyAfterEncoding: Boolean = false
+    ) {
         val currentMeta = _uiState.value.selectedVideoMetadata ?: return
         if (_uiState.value.phase == ProcessingPhase.ENCODING || _uiState.value.phase == ProcessingPhase.PREPARING) {
             return
@@ -182,6 +193,7 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
                     phase = ProcessingPhase.PREPARING,
                     statusText = "Preparando arquivo...",
                     progressPercent = 2,
+                    autoShareAfterEncoding = shareDirectlyAfterEncoding,
                     errorMessage = null
                 )
             }
@@ -206,22 +218,26 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
                     }
                 )
 
-                Toast.makeText(
-                    getApplication(),
-                    "Pronto para postar no WhatsApp!",
-                    Toast.LENGTH_LONG
-                ).show()
-
                 val updatedHistory = processor.loadSavedStatusHdVideos()
                 _uiState.update {
                     it.copy(
                         phase = ProcessingPhase.COMPLETED,
-                        statusText = "Concluído! Vídeo salvo na Galeria.",
+                        statusText = "Concluído! Vídeo salvo na Galeria e pronto para o Status.",
                         progressPercent = 100,
                         latestEncodedVideo = encodedResult,
                         savedGalleryVideos = updatedHistory,
                         previewProcessedOutput = true
                     )
+                }
+
+                Toast.makeText(
+                    getApplication(),
+                    "Pronto para postar no WhatsApp Status!",
+                    Toast.LENGTH_LONG
+                ).show()
+
+                if (shareDirectlyAfterEncoding && context != null) {
+                    shareEncodedVideoToStatus(context, encodedResult, preferWhatsApp = true)
                 }
             } catch (ce: CancellationException) {
                 _uiState.update {
@@ -248,34 +264,129 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
         activeEncodingJob = null
     }
 
-    fun shareVideoToWhatsAppOrSystem(context: Context, videoUri: Uri, preferWhatsApp: Boolean = false) {
-        try {
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4"
-                putExtra(Intent.EXTRA_STREAM, videoUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    /**
+     * Compartilha o vídeo convertido diretamente para o WhatsApp Status (ou WhatsApp Business / Seletor do Android)
+     * utilizando um FileProvider URI autenticado com ClipData e FLAG_GRANT_READ_URI_PERMISSION.
+     */
+    fun shareEncodedVideoToStatus(
+        context: Context,
+        video: EncodedOutputVideo,
+        preferWhatsApp: Boolean = false
+    ) {
+        viewModelScope.launch {
+            try {
+                val shareableUri = processor.prepareShareableFileProviderUri(video)
+                val shareClipData = ClipData.newRawUri(video.displayName, shareableUri)
+
                 if (preferWhatsApp) {
-                    setPackage("com.whatsapp")
+                    val whatsAppPackages = listOf("com.whatsapp", "com.whatsapp.w4b")
+                    var launchedWhatsApp = false
+
+                    for (pkg in whatsAppPackages) {
+                        val waIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "video/mp4"
+                            setPackage(pkg)
+                            putExtra(Intent.EXTRA_STREAM, shareableUri)
+                            clipData = shareClipData
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            context.grantUriPermission(
+                                pkg,
+                                shareableUri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        } catch (_: Exception) {
+                        }
+
+                        if (waIntent.resolveActivity(context.packageManager) != null) {
+                            context.startActivity(waIntent)
+                            launchedWhatsApp = true
+                            break
+                        }
+                    }
+
+                    if (launchedWhatsApp) return@launch
                 }
-            }
-            if (preferWhatsApp && shareIntent.resolveActivity(context.packageManager) != null) {
-                context.startActivity(shareIntent)
-            } else {
-                val fallbackIntent = Intent(Intent.ACTION_SEND).apply {
+
+                // Se o WhatsApp não estiver instalado (ex: emulador) ou o usuário escolheu compartilhar em outros apps:
+                val chooserTarget = Intent(Intent.ACTION_SEND).apply {
                     type = "video/mp4"
-                    putExtra(Intent.EXTRA_STREAM, videoUri)
+                    putExtra(Intent.EXTRA_STREAM, shareableUri)
+                    clipData = shareClipData
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                context.startActivity(
-                    Intent.createChooser(fallbackIntent, "Postar Status HD em...")
-                )
+                val chooser = Intent.createChooser(chooserTarget, "Postar Status HD em...").apply {
+                    clipData = shareClipData
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
+            } catch (e: Exception) {
+                Toast.makeText(
+                    context,
+                    "Erro ao compartilhar vídeo: ${e.localizedMessage}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
-        } catch (e: Exception) {
-            Toast.makeText(
-                context,
-                "Não foi possível abrir o compartilhamento: ${e.localizedMessage}",
-                Toast.LENGTH_SHORT
-            ).show()
+        }
+    }
+
+    /**
+     * Faz o download/salvamento direto na pasta pública "Downloads/StatusHD" do aparelho.
+     */
+    fun downloadVideoToPublicDownloads(context: Context, video: EncodedOutputVideo) {
+        viewModelScope.launch {
+            val savedUri = processor.saveCopyToPublicDownloads(video)
+            if (savedUri != null) {
+                Toast.makeText(
+                    context,
+                    "Download concluído! Salvo em Downloads/StatusHD/${video.displayName}",
+                    Toast.LENGTH_LONG
+                ).show()
+                _uiState.update {
+                    it.copy(statusText = "Arquivo salvo em Downloads/StatusHD/${video.displayName}")
+                }
+            } else {
+                Toast.makeText(
+                    context,
+                    "Não foi possível salvar na pasta Downloads.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    fun prepareSaveAsDocument(video: EncodedOutputVideo, launchCreateDocument: (String) -> Unit) {
+        pendingSaveAsVideo = video
+        val defaultName = video.displayName.ifBlank { "StatusHD_${System.currentTimeMillis()}.mp4" }
+        launchCreateDocument(defaultName)
+    }
+
+    fun onSaveAsDocumentDestinationPicked(context: Context, destinationUri: Uri?) {
+        val video = pendingSaveAsVideo ?: _uiState.value.latestEncodedVideo ?: return
+        pendingSaveAsVideo = null
+        if (destinationUri == null) return
+
+        viewModelScope.launch {
+            val ok = processor.copyVideoToDestinationUri(video, destinationUri)
+            if (ok) {
+                Toast.makeText(
+                    context,
+                    "Vídeo salvo com sucesso no local escolhido!",
+                    Toast.LENGTH_LONG
+                ).show()
+                _uiState.update {
+                    it.copy(statusText = "Vídeo baixado e salvo com sucesso: ${video.displayName}")
+                }
+            } else {
+                Toast.makeText(
+                    context,
+                    "Erro ao salvar o arquivo no destino selecionado.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 }

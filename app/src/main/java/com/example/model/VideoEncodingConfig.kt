@@ -139,6 +139,8 @@ data class VideoMetadata(
 data class EncodedOutputVideo(
     val id: Long,
     val contentUri: Uri,
+    val galleryUri: Uri? = null,
+    val localFilePath: String? = null,
     val displayName: String,
     val width: Int,
     val height: Int,

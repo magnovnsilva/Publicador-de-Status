@@ -1,6 +1,5 @@
 package com.example.ui
 
-import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -35,11 +34,13 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.MovieCreation
 import androidx.compose.material.icons.filled.PlayCircleFilled
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
@@ -95,6 +96,13 @@ fun StatusHdScreen(
         uri?.let { viewModel.onVideoSelected(it) }
     }
 
+    // System "Save As" document launcher so the user can save the MP4 anywhere on device
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("video/mp4")
+    ) { destinationUri: Uri? ->
+        viewModel.onSaveAsDocumentDestinationPicked(context, destinationUri)
+    }
+
     val launchVideoPicker = {
         try {
             pickVisualMediaLauncher.launch(
@@ -147,13 +155,32 @@ fun StatusHdScreen(
                                 uiState = uiState,
                                 onSelectVideoClick = launchVideoPicker,
                                 onGenerateDemoClick = viewModel::generateAndSelectDemoVideo,
-                                onStartEncodingClick = viewModel::startVenlowEncoding,
-                                onCancelEncodingClick = viewModel::cancelEncoding,
-                                onShareWhatsAppClick = { uri ->
-                                    viewModel.shareVideoToWhatsAppOrSystem(context, uri, preferWhatsApp = true)
+                                onStartEncodingClick = {
+                                    viewModel.startVenlowEncoding(
+                                        context = context,
+                                        shareDirectlyAfterEncoding = false
+                                    )
                                 },
-                                onShareSystemClick = { uri ->
-                                    viewModel.shareVideoToWhatsAppOrSystem(context, uri, preferWhatsApp = false)
+                                onEncodeAndShareStatusClick = {
+                                    viewModel.startVenlowEncoding(
+                                        context = context,
+                                        shareDirectlyAfterEncoding = true
+                                    )
+                                },
+                                onCancelEncodingClick = viewModel::cancelEncoding,
+                                onShareWhatsAppClick = { video ->
+                                    viewModel.shareEncodedVideoToStatus(context, video, preferWhatsApp = true)
+                                },
+                                onShareSystemClick = { video ->
+                                    viewModel.shareEncodedVideoToStatus(context, video, preferWhatsApp = false)
+                                },
+                                onDownloadToPublicDownloadsClick = { video ->
+                                    viewModel.downloadVideoToPublicDownloads(context, video)
+                                },
+                                onSaveAsDocumentClick = { video ->
+                                    viewModel.prepareSaveAsDocument(video) { defaultFileName ->
+                                        createDocumentLauncher.launch(defaultFileName)
+                                    }
                                 }
                             )
                         }
@@ -188,11 +215,14 @@ fun StatusHdScreen(
                             items(uiState.savedGalleryVideos, key = { it.id }) { item ->
                                 SavedVideoHistoryCard(
                                     video = item,
+                                    onDownloadClick = {
+                                        viewModel.downloadVideoToPublicDownloads(context, item)
+                                    },
                                     onShareWhatsApp = {
-                                        viewModel.shareVideoToWhatsAppOrSystem(context, item.contentUri, preferWhatsApp = true)
+                                        viewModel.shareEncodedVideoToStatus(context, item, preferWhatsApp = true)
                                     },
                                     onShareGeneral = {
-                                        viewModel.shareVideoToWhatsAppOrSystem(context, item.contentUri, preferWhatsApp = false)
+                                        viewModel.shareEncodedVideoToStatus(context, item, preferWhatsApp = false)
                                     }
                                 )
                             }
@@ -220,13 +250,32 @@ fun StatusHdScreen(
                             uiState = uiState,
                             onSelectVideoClick = launchVideoPicker,
                             onGenerateDemoClick = viewModel::generateAndSelectDemoVideo,
-                            onStartEncodingClick = viewModel::startVenlowEncoding,
-                            onCancelEncodingClick = viewModel::cancelEncoding,
-                            onShareWhatsAppClick = { uri ->
-                                viewModel.shareVideoToWhatsAppOrSystem(context, uri, preferWhatsApp = true)
+                            onStartEncodingClick = {
+                                viewModel.startVenlowEncoding(
+                                    context = context,
+                                    shareDirectlyAfterEncoding = false
+                                )
                             },
-                            onShareSystemClick = { uri ->
-                                viewModel.shareVideoToWhatsAppOrSystem(context, uri, preferWhatsApp = false)
+                            onEncodeAndShareStatusClick = {
+                                viewModel.startVenlowEncoding(
+                                    context = context,
+                                    shareDirectlyAfterEncoding = true
+                                )
+                            },
+                            onCancelEncodingClick = viewModel::cancelEncoding,
+                            onShareWhatsAppClick = { video ->
+                                viewModel.shareEncodedVideoToStatus(context, video, preferWhatsApp = true)
+                            },
+                            onShareSystemClick = { video ->
+                                viewModel.shareEncodedVideoToStatus(context, video, preferWhatsApp = false)
+                            },
+                            onDownloadToPublicDownloadsClick = { video ->
+                                viewModel.downloadVideoToPublicDownloads(context, video)
+                            },
+                            onSaveAsDocumentClick = { video ->
+                                viewModel.prepareSaveAsDocument(video) { defaultFileName ->
+                                    createDocumentLauncher.launch(defaultFileName)
+                                }
                             },
                             modifier = Modifier.widthIn(max = 600.dp)
                         )
@@ -275,11 +324,14 @@ fun StatusHdScreen(
                         items(uiState.savedGalleryVideos, key = { it.id }) { item ->
                             SavedVideoHistoryCard(
                                 video = item,
+                                onDownloadClick = {
+                                    viewModel.downloadVideoToPublicDownloads(context, item)
+                                },
                                 onShareWhatsApp = {
-                                    viewModel.shareVideoToWhatsAppOrSystem(context, item.contentUri, preferWhatsApp = true)
+                                    viewModel.shareEncodedVideoToStatus(context, item, preferWhatsApp = true)
                                 },
                                 onShareGeneral = {
-                                    viewModel.shareVideoToWhatsAppOrSystem(context, item.contentUri, preferWhatsApp = false)
+                                    viewModel.shareEncodedVideoToStatus(context, item, preferWhatsApp = false)
                                 },
                                 modifier = Modifier.widthIn(max = 600.dp)
                             )
@@ -378,9 +430,12 @@ private fun ActionAndStatusConsole(
     onSelectVideoClick: () -> Unit,
     onGenerateDemoClick: () -> Unit,
     onStartEncodingClick: () -> Unit,
+    onEncodeAndShareStatusClick: () -> Unit,
     onCancelEncodingClick: () -> Unit,
-    onShareWhatsAppClick: (Uri) -> Unit,
-    onShareSystemClick: (Uri) -> Unit,
+    onShareWhatsAppClick: (EncodedOutputVideo) -> Unit,
+    onShareSystemClick: (EncodedOutputVideo) -> Unit,
+    onDownloadToPublicDownloadsClick: (EncodedOutputVideo) -> Unit,
+    onSaveAsDocumentClick: (EncodedOutputVideo) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isBusy = uiState.phase == ProcessingPhase.ENCODING ||
@@ -587,7 +642,7 @@ private fun ActionAndStatusConsole(
                 }
             }
 
-            // Encode / Cancel CTA when a video is loaded
+            // Encode & Direct Status Share CTAs when a video is loaded
             if (uiState.selectedVideoMetadata != null) {
                 if (uiState.phase == ProcessingPhase.ENCODING || uiState.phase == ProcessingPhase.PREPARING) {
                     OutlinedButton(
@@ -612,41 +667,63 @@ private fun ActionAndStatusConsole(
                         )
                     }
                 } else {
-                    Button(
-                        onClick = onStartEncodingClick,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .testTag("btn_start_encoding"),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = null,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Codificar em Alta Definição (Status HD)",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = onEncodeAndShareStatusClick,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .testTag("btn_encode_and_share_status"),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Converter HD e Postar Direto no Status",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = onStartEncodingClick,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("btn_start_encoding"),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Apenas Converter e Salvar na Galeria",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
                     }
                 }
             }
 
-            // Post-encoding Quick Share to WhatsApp / System sheet
-            AnimatedVisibility(visible = uiState.latestEncodedVideo != null && uiState.phase == ProcessingPhase.COMPLETED) {
+            // Post-encoding Quick Share to WhatsApp / System & Download Card
+            AnimatedVisibility(visible = uiState.latestEncodedVideo != null) {
                 val latest = uiState.latestEncodedVideo
                 if (latest != null) {
                     Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.65f))
                     ) {
                         Column(
                             modifier = Modifier
@@ -659,14 +736,15 @@ private fun ActionAndStatusConsole(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "Salvo em Filmes/StatusHD",
+                                        text = "VÍDEO HD PRONTO PARA O STATUS",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "${latest.displayName} (${latest.formattedSizeMb})",
+                                        text = "${latest.displayName} • ${latest.formattedSizeMb}",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurface,
                                         fontWeight = FontWeight.Bold
@@ -674,12 +752,13 @@ private fun ActionAndStatusConsole(
                                 }
                             }
 
+                            // Row 1: Direct Share to WhatsApp Status + General Share
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(
-                                    onClick = { onShareWhatsAppClick(latest.contentUri) },
+                                    onClick = { onShareWhatsAppClick(latest) },
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp)
@@ -697,13 +776,13 @@ private fun ActionAndStatusConsole(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Postar no WhatsApp",
+                                        text = "Postar no Status",
                                         style = MaterialTheme.typography.labelLarge
                                     )
                                 }
 
                                 FilledTonalButton(
-                                    onClick = { onShareSystemClick(latest.contentUri) },
+                                    onClick = { onShareSystemClick(latest) },
                                     modifier = Modifier
                                         .height(48.dp)
                                         .testTag("btn_share_other"),
@@ -713,6 +792,63 @@ private fun ActionAndStatusConsole(
                                         imageVector = Icons.Default.Share,
                                         contentDescription = "Compartilhar em outros apps",
                                         modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Outros Apps",
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+
+                            // Row 2: Direct Download to Downloads folder + Save As Document
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { onDownloadToPublicDownloadsClick(latest) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("btn_download_video"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.8f))
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Download,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Baixar (Downloads)",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = { onSaveAsDocumentClick(latest) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("btn_save_as_video"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SaveAlt,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Salvar Como...",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
                             }
@@ -746,7 +882,7 @@ private fun GalleryHistorySectionHeader(
                 tint = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = "Galeria Filmes/StatusHD",
+                text = "Vídeos Convertidos (Filmes/StatusHD)",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onBackground
             )
@@ -805,6 +941,7 @@ private fun EmptyHistoryCard(modifier: Modifier = Modifier) {
 @Composable
 private fun SavedVideoHistoryCard(
     video: EncodedOutputVideo,
+    onDownloadClick: () -> Unit,
     onShareWhatsApp: () -> Unit,
     onShareGeneral: () -> Unit,
     modifier: Modifier = Modifier
@@ -857,7 +994,19 @@ private fun SavedVideoHistoryCard(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                IconButton(
+                    onClick = onDownloadClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("btn_history_download_${video.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Baixar vídeo para Downloads",
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                }
                 IconButton(
                     onClick = onShareWhatsApp,
                     modifier = Modifier
@@ -866,7 +1015,7 @@ private fun SavedVideoHistoryCard(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Enviar para o WhatsApp",
+                        contentDescription = "Postar no Status do WhatsApp",
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
