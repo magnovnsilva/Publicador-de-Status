@@ -1,0 +1,6 @@
+{
+  "name": "StatusHD",
+  "description": "Codificador e otimizador de vídeo em Alta Definição (1080x1920 30fps H.264) estilo Venlow para WhatsApp Status, Instagram Stories e TikTok.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

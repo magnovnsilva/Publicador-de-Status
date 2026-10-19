@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">StatusHD</string>
+    <string name="subtitle_venlow_engine">Venlow-Style Anti-Compression HD Video Engine</string>
+    <string name="select_video">Selecionar Vídeo da Galeria</string>
+    <string name="change_video">Trocar Vídeo</string>
+    <string name="load_demo_video">Gerar Vídeo de Teste 4K/60fps</string>
+    <string name="start_encoding">Codificar em Alta Definição (Status HD)</string>
+    <string name="cancel_encoding">Cancelar Codificação</string>
+    <string name="share_whatsapp">Postar no WhatsApp / Status</string>
+    <string name="save_gallery_success">Concluído! Vídeo salvo em Filmes/StatusHD na Galeria.</string>
+    <string name="status_idle">Selecione um vídeo para otimizar sem perda de qualidade no WhatsApp Status.</string>
+    <string name="status_preparing">Preparando arquivo e analisando metadados...</string>
+    <string name="status_encoding">Codificando em Alta Definição para o Status...</string>
+    <string name="status_error">Erro ao processar vídeo.</string>
+    <string name="preset_section_title">Perfil de Codificação (Estilo Venlow)</string>
+    <string name="filter_section_title">Pipeline de Vídeo e Nitidez (Unsharp + Pad)</string>
+    <string name="history_section_title">Vídeos Otimizados na Galeria (Filmes/StatusHD)</string>
+    <string name="empty_history_tip">Seus vídeos otimizados em 1080x1920 aparecerão aqui prontos para compartilhar.</string>
+    <string name="ffmpeg_command_inspect">Inspecionar Pipeline Equivalente (FFmpeg / MediaCodec)</string>
+</resources>
