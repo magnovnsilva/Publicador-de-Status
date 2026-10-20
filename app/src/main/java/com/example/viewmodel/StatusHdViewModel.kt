@@ -334,24 +334,38 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Faz o download/salvamento direto na pasta pública "Downloads/StatusHD" do aparelho.
+     * Faz o download/salvamento direto na Galeria Pública (DCIM/StatusHD) e também na pasta Downloads/StatusHD.
      */
     fun downloadVideoToPublicDownloads(context: Context, video: EncodedOutputVideo) {
         viewModelScope.launch {
-            val savedUri = processor.saveCopyToPublicDownloads(video)
-            if (savedUri != null) {
+            val localFile = video.localFilePath?.let { java.io.File(it) }
+            val galleryUri = if (localFile != null && localFile.exists()) {
+                processor.insertVideoIntoMediaStoreGallery(
+                    sourceFile = localFile,
+                    displayName = video.displayName,
+                    timestampMs = System.currentTimeMillis(),
+                    width = video.width,
+                    height = video.height,
+                    durationMs = video.durationMs,
+                    sizeBytes = video.sizeBytes
+                )
+            } else {
+                null
+            }
+            val savedDownloadsUri = processor.saveCopyToPublicDownloads(video)
+            if (galleryUri != null || savedDownloadsUri != null) {
                 Toast.makeText(
                     context,
-                    "Download concluído! Salvo em Downloads/StatusHD/${video.displayName}",
+                    "Salvo na Galeria (DCIM/StatusHD) e em Downloads/StatusHD!",
                     Toast.LENGTH_LONG
                 ).show()
                 _uiState.update {
-                    it.copy(statusText = "Arquivo salvo em Downloads/StatusHD/${video.displayName}")
+                    it.copy(statusText = "Vídeo salvo na Galeria (Álbum StatusHD) e em Downloads!")
                 }
             } else {
                 Toast.makeText(
                     context,
-                    "Não foi possível salvar na pasta Downloads.",
+                    "Não foi possível salvar na Galeria/Downloads.",
                     Toast.LENGTH_SHORT
                 ).show()
             }

@@ -363,9 +363,11 @@ class VenlowVideoProcessor(private val context: Context) {
         val displayName = "StatusHD_$timestamp.mp4"
         val fileSize = file.length()
         val outputMeta = extractMetadata(Uri.fromFile(file))
+        val finalWidth = outputMeta.width.let { if (it > 0) it else config.preset.targetWidth }
+        val finalHeight = outputMeta.height.let { if (it > 0) it else config.preset.targetHeight }
+        val finalDurationMs = outputMeta.durationMs.coerceAtLeast(1000L)
 
         // 1. Mantém uma cópia dedicada em filesDir/exported_status para compartilhamento 100% confiável via FileProvider
-        // (mantendo apenas os últimos 8 arquivos para não ocupar espaço excessivo)
         val existingFiles = exportedFilesDir.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList()
         if (existingFiles.size >= 8) {
             existingFiles.drop(7).forEach { it.delete() }
@@ -379,56 +381,16 @@ class VenlowVideoProcessor(private val context: Context) {
             localShareFile
         )
 
-        // 2. Tenta salvar também na Galeria pública (Movies/StatusHD e Downloads) via MediaStore
-        var galleryUri: Uri? = null
-        try {
-            val resolver = context.contentResolver
-            val values = ContentValues().apply {
-                put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
-                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                put(MediaStore.Video.Media.DATE_ADDED, timestamp / 1000L)
-                put(MediaStore.Video.Media.DATE_MODIFIED, timestamp / 1000L)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/StatusHD")
-                    put(MediaStore.Video.Media.IS_PENDING, 1)
-                }
-            }
-
-            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            } else {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            }
-
-            val inserted = resolver.insert(collection, values)
-            if (inserted != null) {
-                resolver.openOutputStream(inserted)?.use { outputStream ->
-                    localShareFile.inputStream().use { inputStream ->
-                        inputStream.copyTo(outputStream)
-                    }
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val completeValues = ContentValues().apply {
-                        put(MediaStore.Video.Media.IS_PENDING, 0)
-                    }
-                    resolver.update(inserted, completeValues, null, null)
-                }
-                galleryUri = inserted
-            }
-        } catch (_: Exception) {
-            // Se o MediaStore falhar em algum dispositivo específico, o arquivo ainda está salvo em localShareFile
-        }
-
-        // Notifica o MediaScanner para que a Galeria e o WhatsApp reconheçam o vídeo imediatamente
-        try {
-            MediaScannerConnection.scanFile(
-                context,
-                arrayOf(localShareFile.absolutePath),
-                arrayOf("video/mp4"),
-                null
-            )
-        } catch (_: Exception) {
-        }
+        // 2. Salva na Galeria pública (Movies/StatusHD e DCIM/Camera ou Movies) via MediaStore com metadados completos
+        val galleryUri: Uri? = insertVideoIntoMediaStoreGallery(
+            sourceFile = localShareFile,
+            displayName = displayName,
+            timestampMs = timestamp,
+            width = finalWidth,
+            height = finalHeight,
+            durationMs = finalDurationMs,
+            sizeBytes = fileSize
+        )
 
         file.delete()
 
@@ -438,13 +400,170 @@ class VenlowVideoProcessor(private val context: Context) {
             galleryUri = galleryUri ?: fileProviderUri,
             localFilePath = localShareFile.absolutePath,
             displayName = displayName,
-            width = outputMeta.width.let { if (it > 0) it else config.preset.targetWidth },
-            height = outputMeta.height.let { if (it > 0) it else config.preset.targetHeight },
-            durationMs = outputMeta.durationMs,
+            width = finalWidth,
+            height = finalHeight,
+            durationMs = finalDurationMs,
             sizeBytes = fileSize,
             dateAddedSec = timestamp / 1000L,
             presetUsed = config.preset.title
         )
+    }
+
+    /**
+     * Insere o vídeo no MediaStore da Galeria Pública com todos os metadados exigidos pelo Google Fotos,
+     * Galeria Samsung/Motorola/Xiaomi e WhatsApp, forçando a indexação imediata via MediaScannerConnection.
+     */
+    suspend fun insertVideoIntoMediaStoreGallery(
+        sourceFile: File,
+        displayName: String,
+        timestampMs: Long,
+        width: Int,
+        height: Int,
+        durationMs: Long,
+        sizeBytes: Long
+    ): Uri? = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        val dateSec = timestampMs / 1000L
+
+        // Em Android 10+ (API 29+), usamos RELATIVE_PATH = DCIM/StatusHD (ou Movies/StatusHD)
+        // Nota: Muitos apps de Galeria (Samsung, Xiaomi, Google Fotos) priorizam pastas dentro de DCIM/ ou Movies/
+        val relativeFoldersToTry = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            listOf(
+                Environment.DIRECTORY_DCIM + "/StatusHD",
+                Environment.DIRECTORY_MOVIES + "/StatusHD",
+                Environment.DIRECTORY_MOVIES
+            )
+        } else {
+            listOf("")
+        }
+
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
+
+        for (relativeFolder in relativeFoldersToTry) {
+            var insertedUri: Uri? = null
+            try {
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.TITLE, displayName.removeSuffix(".mp4"))
+                    put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(MediaStore.Video.Media.DATE_ADDED, dateSec)
+                    put(MediaStore.Video.Media.DATE_MODIFIED, dateSec)
+                    put(MediaStore.Video.Media.DATE_TAKEN, timestampMs)
+                    put(MediaStore.Video.Media.WIDTH, width)
+                    put(MediaStore.Video.Media.HEIGHT, height)
+                    put(MediaStore.Video.Media.RESOLUTION, "${width}x${height}")
+                    put(MediaStore.Video.Media.DURATION, durationMs)
+                    put(MediaStore.Video.Media.SIZE, sizeBytes)
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        if (relativeFolder.isNotEmpty()) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, relativeFolder)
+                        }
+                        put(MediaStore.Video.Media.IS_PENDING, 1)
+                    } else {
+                        val publicDir = File(
+                            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                            "StatusHD"
+                        ).apply { if (!exists()) mkdirs() }
+                        val targetPublicFile = File(publicDir, displayName)
+                        sourceFile.copyTo(targetPublicFile, overwrite = true)
+                        put(MediaStore.Video.Media.DATA, targetPublicFile.absolutePath)
+                    }
+                }
+
+                insertedUri = resolver.insert(collection, values)
+                if (insertedUri != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        resolver.openFileDescriptor(insertedUri, "w")?.use { pfd ->
+                            FileOutputStream(pfd.fileDescriptor).use { outStream ->
+                                sourceFile.inputStream().use { inStream ->
+                                    inStream.copyTo(outStream)
+                                }
+                                outStream.flush()
+                                pfd.fileDescriptor.sync()
+                            }
+                        } ?: resolver.openOutputStream(insertedUri)?.use { outStream ->
+                            sourceFile.inputStream().use { inStream ->
+                                inStream.copyTo(outStream)
+                            }
+                            outStream.flush()
+                        }
+
+                        val completeValues = ContentValues().apply {
+                            put(MediaStore.Video.Media.IS_PENDING, 0)
+                            put(MediaStore.Video.Media.SIZE, sourceFile.length())
+                        }
+                        resolver.update(insertedUri, completeValues, null, null)
+                    }
+
+                    // Descobre o caminho físico real no armazenamento compartilhado (_DATA) para acionar o MediaScanner
+                    var realPublicPath: String? = null
+                    try {
+                        resolver.query(
+                            insertedUri,
+                            arrayOf(MediaStore.Video.Media.DATA),
+                            null,
+                            null,
+                            null
+                        )?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val dataIdx = cursor.getColumnIndex(MediaStore.Video.Media.DATA)
+                                if (dataIdx != -1) {
+                                    realPublicPath = cursor.getString(dataIdx)
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+
+                    val pathsToScan = buildList {
+                        realPublicPath?.let { if (it.isNotBlank()) add(it) }
+                        if (relativeFolder.isNotEmpty()) {
+                            val extRoot = Environment.getExternalStorageDirectory()
+                            val candidate = File(extRoot, "$relativeFolder/$displayName")
+                            if (candidate.exists()) add(candidate.absolutePath)
+                        }
+                    }
+
+                    if (pathsToScan.isNotEmpty()) {
+                        try {
+                            MediaScannerConnection.scanFile(
+                                context,
+                                pathsToScan.toTypedArray(),
+                                Array(pathsToScan.size) { "video/mp4" },
+                                null
+                            )
+                        } catch (_: Exception) {
+                        }
+                    }
+
+                    @Suppress("DEPRECATION")
+                    try {
+                        context.sendBroadcast(
+                            android.content.Intent(
+                                android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,
+                                insertedUri
+                            )
+                        )
+                    } catch (_: Exception) {
+                    }
+
+                    return@withContext insertedUri
+                }
+            } catch (_: Exception) {
+                if (insertedUri != null) {
+                    try {
+                        resolver.delete(insertedUri, null, null)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+        null
     }
 
     /**
