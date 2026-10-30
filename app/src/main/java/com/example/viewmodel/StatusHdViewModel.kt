@@ -260,8 +260,16 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun cancelEncoding() {
+        processor.cancelActiveSession()
         activeEncodingJob?.cancel()
         activeEncodingJob = null
+        _uiState.update {
+            it.copy(
+                phase = ProcessingPhase.IDLE,
+                statusText = "Codificação cancelada.",
+                progressPercent = 0
+            )
+        }
     }
 
     /**

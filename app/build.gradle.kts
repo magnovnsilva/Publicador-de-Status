@@ -64,6 +64,14 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  packaging {
+    resources {
+      pickFirsts.add("lib/**/libc++_shared.so")
+    }
+    jniLibs {
+      pickFirsts.add("lib/**/libc++_shared.so")
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -129,9 +137,10 @@ dependencies {
   implementation(libs.androidx.media3.common)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
-  implementation(libs.androidx.media3.transformer)
-  implementation(libs.androidx.media3.effect)
-  implementation(libs.androidx.media3.muxer)
+  // implementation(libs.androidx.media3.transformer)
+  // implementation(libs.androidx.media3.effect)
+  // implementation(libs.androidx.media3.muxer)
+  implementation("com.antonkarpenko:ffmpeg-kit-full-gpl:2.1.0")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

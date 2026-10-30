@@ -3,7 +3,7 @@ package com.example.media
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
-import android.media.MediaCodecInfo
+import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.net.Uri
@@ -11,55 +11,54 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
-import androidx.annotation.OptIn
 import androidx.core.content.FileProvider
-import androidx.media3.common.Effect
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.effect.Presentation
-import androidx.media3.transformer.Composition
-import androidx.media3.transformer.DefaultEncoderFactory
-import androidx.media3.transformer.EditedMediaItem
-import androidx.media3.transformer.EditedMediaItemSequence
-import androidx.media3.transformer.Effects
-import androidx.media3.transformer.ExportException
-import androidx.media3.transformer.ExportResult
-import androidx.media3.transformer.ProgressHolder
-import androidx.media3.transformer.TransformationRequest
-import androidx.media3.transformer.Transformer
-import androidx.media3.transformer.VideoEncoderSettings
-import com.example.model.AspectFitMode
+import com.antonkarpenko.ffmpegkit.FFmpegKit
+import com.antonkarpenko.ffmpegkit.FFmpegKitConfig
+import com.antonkarpenko.ffmpegkit.ReturnCode
 import com.example.model.EncodedOutputVideo
 import com.example.model.EncodingConfig
-import com.example.model.SharpenLevel
 import com.example.model.VideoMetadata
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 /**
- * Venlow-Style HD Video Transcoding Engine powered by Jetpack Media3 Transformer + Hardware H.264.
+ * Industrial-strength FFmpeg-powered Video Transcoding Engine (`ffmpeg-kit`).
  *
- * Implements the exact pipeline from the user's StatusHD specification with automatic
- * hardware-codec fallback, dual persistence (MediaStore Gallery + internal FileProvider share cache),
- * and user-selected document export (`CreateDocument`).
+ * Replaces fragile hardware MediaCodec / custom OpenGL ES shaders with real embedded FFmpeg (`libx264` + `unsharp`)
+ * so that 8K, 4K, 60fps, 120fps, HEVC, and 10-bit HDR inputs transcode reliably into a 1080x1920
+ * vertical H.264 High@4.0 `yuv420p` MP4 with `-movflags +faststart` and zero black-frame bugs.
  */
 class VenlowVideoProcessor(private val context: Context) {
+
+    @Volatile
+    private var activeSessionId: Long? = null
 
     private val exportedFilesDir: File
         get() = File(context.filesDir, "exported_status").apply {
             if (!exists()) mkdirs()
         }
+
+    fun cancelActiveSession() {
+        val sessionId = activeSessionId
+        if (sessionId != null) {
+            try {
+                FFmpegKit.cancel(sessionId)
+            } catch (_: Exception) {
+            }
+            activeSessionId = null
+        } else {
+            try {
+                FFmpegKit.cancel()
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     suspend fun extractMetadata(uri: Uri): VideoMetadata = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
@@ -147,33 +146,14 @@ class VenlowVideoProcessor(private val context: Context) {
         )
     }
 
-    @OptIn(UnstableApi::class)
-    fun buildVideoEffects(config: EncodingConfig, includeCustomShader: Boolean = true): List<Effect> {
-        val effects = mutableListOf<Effect>()
-        val layoutMode = when (config.aspectFitMode) {
-            AspectFitMode.PAD_BLACK -> Presentation.LAYOUT_SCALE_TO_FIT
-            AspectFitMode.CROP_FILL -> Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
-        }
-
-        // Equivalent to FFmpeg:
-        // scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black
-        effects.add(
-            Presentation.createForWidthAndHeight(
-                config.preset.targetWidth,
-                config.preset.targetHeight,
-                layoutMode
-            )
-        )
-
-        // Equivalent to FFmpeg: unsharp=3:3:0.5:3:3:0.0
-        if (includeCustomShader && config.sharpenLevel != SharpenLevel.OFF) {
-            effects.add(UnsharpGlEffect(config.sharpenLevel.unsharpAmount))
-        }
-
-        return effects
-    }
-
-    @OptIn(UnstableApi::class)
+    /**
+     * Executes the real FFmpeg transcoding pipeline asynchronously (`FFmpegKit.executeAsync`):
+     * - Copies source video to `cacheDir/input_temp.mp4`
+     * - Runs `scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,unsharp=3:3:0.5:3:3:0.0,fps=30,format=yuv420p`
+     * - Encodes with `libx264 -preset medium -profile:v high -level 4.0 -b:v 3200k -maxrate 3500k -bufsize 7000k`
+     * - Encodes audio with `aac -b:a 128k -ar 44100 -ac 2` and `-movflags +faststart`
+     * - Saves to MediaStore Gallery with atomic `IS_PENDING` cleanup on failure or cancellation.
+     */
     suspend fun processVideoVenlowStyle(
         videoUri: Uri,
         config: EncodingConfig,
@@ -183,175 +163,131 @@ class VenlowVideoProcessor(private val context: Context) {
         onStatusMessage("Preparando arquivo...")
         onProgressPercent(2)
 
-        // 1. Copia o vídeo selecionado para o cache interno (input_temp.mp4)
         val inputFile = File(context.cacheDir, "input_temp.mp4")
-        if (inputFile.exists() && (videoUri.scheme != "file" || videoUri.path != inputFile.absolutePath)) {
-            inputFile.delete()
-        }
+        val outputFile = File(context.cacheDir, "status_otimizado.mp4")
 
-        if (videoUri.scheme == "file" && videoUri.path != null) {
-            val sourceFile = File(videoUri.path!!)
-            if (sourceFile.exists() && sourceFile.absolutePath != inputFile.absolutePath) {
-                sourceFile.inputStream().use { input ->
+        try {
+            // 1. Copia o vídeo selecionado para o cache interno para o FFmpeg ler
+            if (inputFile.exists() && (videoUri.scheme != "file" || videoUri.path != inputFile.absolutePath)) {
+                inputFile.delete()
+            }
+
+            if (videoUri.scheme == "file" && videoUri.path != null) {
+                val sourceFile = File(videoUri.path!!)
+                if (sourceFile.exists() && sourceFile.absolutePath != inputFile.absolutePath) {
+                    sourceFile.inputStream().use { input ->
+                        FileOutputStream(inputFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+            } else {
+                context.contentResolver.openInputStream(videoUri)?.use { input ->
                     FileOutputStream(inputFile).use { output ->
                         input.copyTo(output)
                     }
-                }
+                } ?: throw IllegalStateException("Não foi possível abrir o vídeo selecionado.")
             }
-        } else {
-            context.contentResolver.openInputStream(videoUri)?.use { input ->
-                FileOutputStream(inputFile).use { output ->
-                    input.copyTo(output)
-                }
-            } ?: throw IllegalStateException("Não foi possível abrir o vídeo selecionado.")
-        }
 
-        val outputFile = File(context.cacheDir, "status_otimizado.mp4")
-        if (outputFile.exists()) outputFile.delete()
-
-        onStatusMessage("Codificando em Alta Definição para o Status...")
-        onProgressPercent(5)
-
-        // 2. Executa a codificação em Alta Definição:
-        // Tentativa 1: H.264 High@4.0 + Unsharp Shader
-        // Tentativa 2 (Fallback automático para emuladores/GPUs): Perfil padrão H.264 sem restrição estrita de ProfileLevel
-        try {
-            runTransformerExport(
-                inputFile = inputFile,
-                outputFile = outputFile,
-                config = config,
-                strictHighProfile = true,
-                includeCustomShader = true,
-                onProgressPercent = onProgressPercent
-            )
-        } catch (_: Exception) {
             if (outputFile.exists()) outputFile.delete()
-            onStatusMessage("Otimizando compatibilidade do codificador H.264...")
-            runTransformerExport(
-                inputFile = inputFile,
-                outputFile = outputFile,
-                config = config,
-                strictHighProfile = false,
-                includeCustomShader = false,
+
+            val inputMeta = extractMetadata(Uri.fromFile(inputFile))
+            val effectiveTotalDurationMs = config.preset.maxDurationSec
+                ?.let { minOf(inputMeta.durationMs.coerceAtLeast(1000L), it * 1000L) }
+                ?: inputMeta.durationMs.coerceAtLeast(1000L)
+
+            onStatusMessage("Codificando em Alta Definição para o Status...")
+            onProgressPercent(5)
+
+            // 2. Comando FFmpeg idêntico ao Venlow (1080x1920 vertical, unsharp, 30fps, H.264 High@4.0 yuv420p, faststart)
+            val ffmpegCommand = config.buildEquivalentFfmpegCommand(
+                inputPath = inputFile.absolutePath,
+                outputPath = outputFile.absolutePath
+            )
+
+            runFfmpegSession(
+                command = ffmpegCommand,
+                totalDurationMs = effectiveTotalDurationMs,
                 onProgressPercent = onProgressPercent
             )
-        }
 
-        // 3. Salva na Galeria (Movies/StatusHD) E mantém cópia segura para compartilhamento direto via FileProvider
-        onStatusMessage("Salvando vídeo e preparando para o Status...")
-        val savedVideo = saveToGalleryAndShareCache(outputFile, config)
-        inputFile.delete()
-        onProgressPercent(100)
-        onStatusMessage("Concluído! Vídeo salvo na Galeria e pronto para o Status.")
-        savedVideo
+            if (!outputFile.exists() || outputFile.length() == 0L) {
+                throw IllegalStateException("Arquivo de saída vazio após codificação FFmpeg.")
+            }
+
+            // 3. Salva na Galeria (MediaStore) e no cache de compartilhamento FileProvider
+            onStatusMessage("Salvando em Filmes/StatusHD na Galeria...")
+            val savedVideo = saveToGalleryAndShareCache(outputFile, config)
+            onProgressPercent(100)
+            onStatusMessage("Concluído! Vídeo salvo na Galeria.")
+            savedVideo
+        } catch (ce: CancellationException) {
+            if (outputFile.exists()) outputFile.delete()
+            throw ce
+        } catch (e: Exception) {
+            if (outputFile.exists()) outputFile.delete()
+            throw e
+        } finally {
+            activeSessionId = null
+            if (inputFile.exists()) {
+                inputFile.delete()
+            }
+        }
     }
 
-    @OptIn(UnstableApi::class)
-    private suspend fun runTransformerExport(
-        inputFile: File,
-        outputFile: File,
-        config: EncodingConfig,
-        strictHighProfile: Boolean,
-        includeCustomShader: Boolean,
+    private suspend fun runFfmpegSession(
+        command: String,
+        totalDurationMs: Long,
         onProgressPercent: (Int) -> Unit
-    ) = withContext(Dispatchers.Main) {
-        suspendCancellableCoroutine<Unit> { continuation ->
-            val mediaItemBuilder = MediaItem.Builder()
-                .setUri(Uri.fromFile(inputFile))
-
-            config.preset.maxDurationSec?.let { maxSec ->
-                mediaItemBuilder.setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(0L)
-                        .setEndPositionMs(maxSec * 1000L)
-                        .build()
-                )
+    ) = suspendCancellableCoroutine<Unit> { continuation ->
+        FFmpegKitConfig.enableStatisticsCallback { statistics ->
+            if (statistics != null && totalDurationMs > 0L) {
+                val timeMs = statistics.time.toLong().coerceAtLeast(0L)
+                val rawPct = ((timeMs.toDouble() / totalDurationMs.toDouble()) * 88.0).toInt()
+                val mappedPct = (5 + rawPct).coerceIn(5, 94)
+                onProgressPercent(mappedPct)
             }
+        }
 
-            val editedMediaItem = EditedMediaItem.Builder(mediaItemBuilder.build())
-                .setFrameRate(config.preset.targetFps)
-                .setRemoveAudio(config.removeAudio)
-                .setEffects(
-                    Effects(
-                        /* audioProcessors = */ emptyList(),
-                        /* videoEffects = */ buildVideoEffects(config, includeCustomShader)
-                    )
-                )
-                .build()
+        val session = FFmpegKit.executeAsync(command) { completedSession ->
+            FFmpegKitConfig.enableStatisticsCallback(null)
+            activeSessionId = null
+            val returnCode = completedSession.returnCode
 
-            val videoEncoderSettingsBuilder = VideoEncoderSettings.Builder()
-                .setBitrate(config.preset.videoBitrateKbps * 1_000)
-
-            if (strictHighProfile) {
-                videoEncoderSettingsBuilder.setEncodingProfileLevel(
-                    MediaCodecInfo.CodecProfileLevel.AVCProfileHigh,
-                    MediaCodecInfo.CodecProfileLevel.AVCLevel4
-                )
-            }
-
-            val encoderFactory = DefaultEncoderFactory.Builder(context)
-                .setRequestedVideoEncoderSettings(videoEncoderSettingsBuilder.build())
-                .setEnableFallback(true)
-                .build()
-
-            val transformationRequestBuilder = TransformationRequest.Builder()
-                .setVideoMimeType(MimeTypes.VIDEO_H264)
-            if (!config.removeAudio) {
-                transformationRequestBuilder.setAudioMimeType(MimeTypes.AUDIO_AAC)
-            }
-
-            var progressJob: Job? = null
-
-            val transformer = Transformer.Builder(context)
-                .setEncoderFactory(encoderFactory)
-                .setTransformationRequest(transformationRequestBuilder.build())
-                .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        progressJob?.cancel()
-                        onProgressPercent(95)
-                        if (continuation.isActive) {
-                            continuation.resume(Unit)
-                        }
+            when {
+                ReturnCode.isSuccess(returnCode) -> {
+                    onProgressPercent(95)
+                    if (continuation.isActive) {
+                        continuation.resume(Unit)
                     }
-
-                    override fun onError(
-                        composition: Composition,
-                        exportResult: ExportResult,
-                        exportException: ExportException
-                    ) {
-                        progressJob?.cancel()
-                        if (continuation.isActive) {
-                            continuation.resumeWithException(exportException)
-                        }
+                }
+                ReturnCode.isCancel(returnCode) -> {
+                    if (continuation.isActive) {
+                        continuation.cancel(CancellationException("Codificação FFmpeg cancelada pelo usuário."))
                     }
-                })
-                .build()
-
-            val compositionBuilder = Composition.Builder(
-                EditedMediaItemSequence(editedMediaItem)
-            )
-            if (strictHighProfile && config.hdrToSdrToneMap && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                compositionBuilder.setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_MEDIACODEC)
-            }
-
-            transformer.start(compositionBuilder.build(), outputFile.absolutePath)
-
-            val progressHolder = ProgressHolder()
-            progressJob = CoroutineScope(Dispatchers.Main).launch {
-                while (isActive) {
-                    val state = transformer.getProgress(progressHolder)
-                    if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                        val mapped = (5 + (progressHolder.progress * 0.88f)).toInt().coerceIn(5, 94)
-                        onProgressPercent(mapped)
+                }
+                else -> {
+                    val failTail = completedSession.failStackTrace
+                        ?: completedSession.allLogsAsString?.takeLast(320)
+                        ?: "Código de retorno FFmpeg: $returnCode"
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(
+                            IllegalStateException("Erro ao processar vídeo no FFmpeg: $failTail")
+                        )
                     }
-                    delay(120L)
                 }
             }
+        }
 
-            continuation.invokeOnCancellation {
-                progressJob.cancel()
-                transformer.cancel()
+        activeSessionId = session.sessionId
+
+        continuation.invokeOnCancellation {
+            FFmpegKitConfig.enableStatisticsCallback(null)
+            try {
+                FFmpegKit.cancel(session.sessionId)
+            } catch (_: Exception) {
             }
+            activeSessionId = null
         }
     }
 
@@ -381,7 +317,7 @@ class VenlowVideoProcessor(private val context: Context) {
             localShareFile
         )
 
-        // 2. Salva na Galeria pública (Movies/StatusHD e DCIM/Camera ou Movies) via MediaStore com metadados completos
+        // 2. Salva na Galeria pública (Movies/StatusHD e DCIM/StatusHD) via MediaStore com proteção contra IS_PENDING órfão
         val galleryUri: Uri? = insertVideoIntoMediaStoreGallery(
             sourceFile = localShareFile,
             displayName = displayName,
@@ -410,8 +346,9 @@ class VenlowVideoProcessor(private val context: Context) {
     }
 
     /**
-     * Insere o vídeo no MediaStore da Galeria Pública com todos os metadados exigidos pelo Google Fotos,
-     * Galeria Samsung/Motorola/Xiaomi e WhatsApp, forçando a indexação imediata via MediaScannerConnection.
+     * Insere o vídeo no MediaStore da Galeria Pública com try-catch-finally rigoroso:
+     * se a gravação falhar ou for cancelada, a entrada `IS_PENDING = 1` é imediatamente removida
+     * (`resolver.delete(insertedUri, null, null)`) para nunca deixar arquivos fantasmas ou pretos na Galeria.
      */
     suspend fun insertVideoIntoMediaStoreGallery(
         sourceFile: File,
@@ -422,15 +359,17 @@ class VenlowVideoProcessor(private val context: Context) {
         durationMs: Long,
         sizeBytes: Long
     ): Uri? = withContext(Dispatchers.IO) {
+        if (!sourceFile.exists() || sourceFile.length() == 0L) {
+            return@withContext null
+        }
+
         val resolver = context.contentResolver
         val dateSec = timestampMs / 1000L
 
-        // Em Android 10+ (API 29+), usamos RELATIVE_PATH = DCIM/StatusHD (ou Movies/StatusHD)
-        // Nota: Muitos apps de Galeria (Samsung, Xiaomi, Google Fotos) priorizam pastas dentro de DCIM/ ou Movies/
         val relativeFoldersToTry = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             listOf(
-                Environment.DIRECTORY_DCIM + "/StatusHD",
                 Environment.DIRECTORY_MOVIES + "/StatusHD",
+                Environment.DIRECTORY_DCIM + "/StatusHD",
                 Environment.DIRECTORY_MOVIES
             )
         } else {
@@ -445,6 +384,7 @@ class VenlowVideoProcessor(private val context: Context) {
 
         for (relativeFolder in relativeFoldersToTry) {
             var insertedUri: Uri? = null
+            var writeSucceeded = false
             try {
                 val values = ContentValues().apply {
                     put(MediaStore.Video.Media.TITLE, displayName.removeSuffix(".mp4"))
@@ -478,29 +418,36 @@ class VenlowVideoProcessor(private val context: Context) {
                 insertedUri = resolver.insert(collection, values)
                 if (insertedUri != null) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        var bytesWritten = 0L
                         resolver.openFileDescriptor(insertedUri, "w")?.use { pfd ->
                             FileOutputStream(pfd.fileDescriptor).use { outStream ->
                                 sourceFile.inputStream().use { inStream ->
-                                    inStream.copyTo(outStream)
+                                    bytesWritten = inStream.copyTo(outStream)
                                 }
                                 outStream.flush()
                                 pfd.fileDescriptor.sync()
                             }
                         } ?: resolver.openOutputStream(insertedUri)?.use { outStream ->
                             sourceFile.inputStream().use { inStream ->
-                                inStream.copyTo(outStream)
+                                bytesWritten = inStream.copyTo(outStream)
                             }
                             outStream.flush()
+                        } ?: throw IllegalStateException("Não foi possível abrir OutputStream do MediaStore.")
+
+                        if (bytesWritten <= 0L) {
+                            throw IllegalStateException("Nenhum byte foi gravado no MediaStore.")
                         }
 
                         val completeValues = ContentValues().apply {
                             put(MediaStore.Video.Media.IS_PENDING, 0)
-                            put(MediaStore.Video.Media.SIZE, sourceFile.length())
+                            put(MediaStore.Video.Media.SIZE, bytesWritten)
                         }
                         resolver.update(insertedUri, completeValues, null, null)
                     }
 
-                    // Descobre o caminho físico real no armazenamento compartilhado (_DATA) para acionar o MediaScanner
+                    writeSucceeded = true
+
+                    // Consulta o caminho físico real (_DATA) para acionar o MediaScanner imediatamente
                     var realPublicPath: String? = null
                     try {
                         resolver.query(
@@ -544,8 +491,8 @@ class VenlowVideoProcessor(private val context: Context) {
                     @Suppress("DEPRECATION")
                     try {
                         context.sendBroadcast(
-                            android.content.Intent(
-                                android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,
+                            Intent(
+                                Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,
                                 insertedUri
                             )
                         )
@@ -554,8 +501,12 @@ class VenlowVideoProcessor(private val context: Context) {
 
                     return@withContext insertedUri
                 }
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (_: Exception) {
-                if (insertedUri != null) {
+                // Tenta a próxima pasta se houver erro específico de diretório
+            } finally {
+                if (!writeSucceeded && insertedUri != null) {
                     try {
                         resolver.delete(insertedUri, null, null)
                     } catch (_: Exception) {
@@ -566,12 +517,7 @@ class VenlowVideoProcessor(private val context: Context) {
         null
     }
 
-    /**
-     * Prepara um FileProvider URI garantido para qualquer vídeo (inclusive itens da Galeria),
-     * evitando erros de permissão quando o WhatsApp ou Instagram tenta ler o stream.
-     */
     suspend fun prepareShareableFileProviderUri(video: EncodedOutputVideo): Uri = withContext(Dispatchers.IO) {
-        // Se já temos o arquivo local em exported_status, retorna direto o FileProvider URI dele
         video.localFilePath?.let { path ->
             val f = File(path)
             if (f.exists() && f.length() > 0L) {
@@ -583,7 +529,6 @@ class VenlowVideoProcessor(private val context: Context) {
             }
         }
 
-        // Caso seja um item antigo do MediaStore, copia para exported_status e gera o FileProvider URI
         val targetFile = File(exportedFilesDir, video.displayName.ifBlank { "StatusHD_${video.id}.mp4" })
         if (!targetFile.exists() || targetFile.length() == 0L) {
             val sourceUri = video.galleryUri ?: video.contentUri
@@ -601,10 +546,6 @@ class VenlowVideoProcessor(private val context: Context) {
         )
     }
 
-    /**
-     * Copia o vídeo convertido para um URI escolhido pelo usuário (ex: pasta Downloads via CreateDocument)
-     * ou diretamente para a coleção MediaStore.Downloads.
-     */
     suspend fun copyVideoToDestinationUri(video: EncodedOutputVideo, destinationUri: Uri): Boolean = withContext(Dispatchers.IO) {
         try {
             val localFile = video.localFilePath?.let { File(it) }
@@ -619,6 +560,7 @@ class VenlowVideoProcessor(private val context: Context) {
                         input.copyTo(outputStream)
                     } ?: return@withContext false
                 }
+                outputStream.flush()
             } ?: return@withContext false
             true
         } catch (_: Exception) {
@@ -626,31 +568,41 @@ class VenlowVideoProcessor(private val context: Context) {
         }
     }
 
-    /**
-     * Salva uma cópia rápida diretamente na pasta pública "Downloads" do Android (Android 10+ MediaStore.Downloads).
-     */
     suspend fun saveCopyToPublicDownloads(video: EncodedOutputVideo): Uri? = withContext(Dispatchers.IO) {
-        try {
-            val resolver = context.contentResolver
-            val fileName = video.displayName.ifBlank { "StatusHD_${System.currentTimeMillis()}.mp4" }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val resolver = context.contentResolver
+        val fileName = video.displayName.ifBlank { "StatusHD_${System.currentTimeMillis()}.mp4" }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            var insertedUri: Uri? = null
+            var success = false
+            try {
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, fileName)
                     put(MediaStore.Downloads.MIME_TYPE, "video/mp4")
                     put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/StatusHD")
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
-                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return@withContext null
-                val copied = copyVideoToDestinationUri(video, uri)
+                insertedUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return@withContext null
+                val copied = copyVideoToDestinationUri(video, insertedUri)
                 if (!copied) return@withContext null
-                val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-                resolver.update(uri, done, null, null)
-                return@withContext uri
-            } else {
-                return@withContext video.galleryUri ?: video.contentUri
+                val done = ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                    put(MediaStore.Downloads.SIZE, video.sizeBytes)
+                }
+                resolver.update(insertedUri, done, null, null)
+                success = true
+                return@withContext insertedUri
+            } catch (_: Exception) {
+                return@withContext null
+            } finally {
+                if (!success && insertedUri != null) {
+                    try {
+                        resolver.delete(insertedUri, null, null)
+                    } catch (_: Exception) {
+                    }
+                }
             }
-        } catch (_: Exception) {
-            null
+        } else {
+            return@withContext video.galleryUri ?: video.contentUri
         }
     }
 
@@ -658,7 +610,6 @@ class VenlowVideoProcessor(private val context: Context) {
         val results = mutableListOf<EncodedOutputVideo>()
         val seenNames = mutableSetOf<String>()
 
-        // 1. Carrega primeiro os arquivos locais em exported_status (sempre disponíveis e rápidos)
         val localFiles = exportedFilesDir.listFiles()
             ?.filter { it.isFile && it.name.endsWith(".mp4") && it.length() > 0L }
             ?.sortedByDescending { it.lastModified() }
@@ -689,7 +640,6 @@ class VenlowVideoProcessor(private val context: Context) {
             )
         }
 
-        // 2. Complementa com vídeos da Galeria (MediaStore) que não estejam no cache local
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
@@ -723,12 +673,13 @@ class VenlowVideoProcessor(private val context: Context) {
                     val id = cursor.getLong(idCol)
                     val name = cursor.getString(nameCol) ?: "StatusHD_$id.mp4"
                     if (name in seenNames) continue
+                    val size = cursor.getLong(sizeCol)
+                    if (size <= 0L) continue
                     seenNames.add(name)
 
                     val width = cursor.getInt(widthCol).let { if (it > 0) it else 1080 }
                     val height = cursor.getInt(heightCol).let { if (it > 0) it else 1920 }
                     val duration = cursor.getLong(durCol)
-                    val size = cursor.getLong(sizeCol)
                     val dateAdded = cursor.getLong(dateCol)
                     val contentUri = ContentUris.withAppendedId(
                         MediaStore.Video.Media.EXTERNAL_CONTENT_URI,

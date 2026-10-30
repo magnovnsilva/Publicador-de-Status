@@ -56,7 +56,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import com.example.media.UnsharpGlEffect
 import com.example.model.AspectFitMode
 import com.example.model.EncodedOutputVideo
 import com.example.model.EncodingConfig
@@ -89,20 +88,9 @@ fun VideoStagePlayerCard(
         }
     }
 
-    LaunchedEffect(activeUri, config.sharpenLevel, previewProcessedOutput) {
+    LaunchedEffect(activeUri, previewProcessedOutput) {
         if (activeUri != null) {
             exoPlayer.setMediaItem(MediaItem.fromUri(activeUri))
-            if (!previewProcessedOutput && config.sharpenLevel != SharpenLevel.OFF) {
-                try {
-                    exoPlayer.setVideoEffects(listOf(UnsharpGlEffect(config.sharpenLevel.unsharpAmount)))
-                } catch (_: Exception) {
-                }
-            } else {
-                try {
-                    exoPlayer.setVideoEffects(emptyList())
-                } catch (_: Exception) {
-                }
-            }
             exoPlayer.prepare()
             exoPlayer.playWhenReady = isPlaying
         } else {
