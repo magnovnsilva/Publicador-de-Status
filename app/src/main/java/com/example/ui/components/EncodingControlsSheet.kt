@@ -80,7 +80,7 @@ fun EncodingControlsSheet(
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "Perfil de Codificação (Estilo Venlow)",
+                    text = "Qualidade do vídeo",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -156,7 +156,7 @@ fun EncodingControlsSheet(
                     tint = MaterialTheme.colorScheme.secondary
                 )
                 Text(
-                    text = "Enquadramento Vertical 9:16",
+                    text = "Enquadramento",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -201,7 +201,7 @@ fun EncodingControlsSheet(
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "Filtro de Nitidez (Unsharp Luma 3×3)",
+                    text = "Nitidez",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -236,7 +236,7 @@ fun EncodingControlsSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Áudio Estéreo AAC 128 kbps (44.1 kHz)",
+                        text = "Manter áudio",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -261,7 +261,7 @@ fun EncodingControlsSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Mapeamento de Tom HDR → SDR (yuv420p)",
+                        text = "Converter HDR para SDR",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -305,7 +305,7 @@ fun EncodingControlsSheet(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Parâmetros Técnicos (FFmpeg / H.264)",
+                                text = "Detalhes da conversão",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurface
                             )

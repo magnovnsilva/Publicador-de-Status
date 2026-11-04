@@ -122,7 +122,7 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
                         isGeneratingDemo = false,
                         selectedVideoMetadata = meta,
                         phase = ProcessingPhase.IDLE,
-                        statusText = "Vídeo de teste 1080p carregado! Pronto para codificar no padrão Venlow.",
+                        statusText = "Vídeo de teste carregado. Tudo pronto para converter.",
                         previewProcessedOutput = false
                     )
                 }
@@ -325,7 +325,7 @@ class StatusHdViewModel(application: Application) : AndroidViewModel(application
                     clipData = shareClipData
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                val chooser = Intent.createChooser(chooserTarget, "Postar Status HD em...").apply {
+                val chooser = Intent.createChooser(chooserTarget, "Compartilhar vídeo em...").apply {
                     clipData = shareClipData
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
