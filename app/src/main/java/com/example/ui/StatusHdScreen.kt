@@ -345,81 +345,37 @@ fun StatusHdScreen(
 
 @Composable
 private fun StudioHeaderBanner(modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        color = Color.Transparent
+    Row(
+        modifier = modifier.fillMaxWidth().padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFF0A2A1E),
-                            Color(0xFF101C2B),
-                            Color(0xFF0A2430)
-                        )
-                    ),
-                    shape = RoundedCornerShape(24.dp)
-                )
-                .padding(20.dp)
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.size(48.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.Bolt,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(26.dp)
-                            )
-                        }
-                    }
-                    Column {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = "StatusHD",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            ) {
-                                Text(
-                                    text = "VENLOW ENGINE",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        Text(
-                            text = "Codificador Vertical 1080×1920 • 30fps • H.264 High@4.0",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                    }
-                }
-                Text(
-                    text = "Evita a compressão agressiva do WhatsApp Status aplicando escala vertical 9:16 com bordas pretas, filtro de nitidez Unsharp 3×3 e bitrate controlado de 3200 kbps.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Default.PlayCircleFilled,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(27.dp)
                 )
             }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "REDUXO VIDEO",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = "Seu vídeo pronto para o Status",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -550,34 +506,24 @@ private fun ActionAndStatusConsole(
                         color = MaterialTheme.colorScheme.primary,
                         trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Filtro: scale=1080:1920 + pad + unsharp=3:3:0.5",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "H.264 3200k + AAC 128k",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                    }
+                    Text(
+                        text = "Preparando seu vídeo…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
             // Primary Selection Buttons (matches btnSelect from user's prompt)
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
                     onClick = onSelectVideoClick,
                     enabled = !isBusy,
                     modifier = Modifier
-                        .weight(1f)
+                        .fillMaxWidth()
                         .height(52.dp)
                         .testTag("btnSelect"),
                     shape = RoundedCornerShape(14.dp),
@@ -614,7 +560,8 @@ private fun ActionAndStatusConsole(
                     onClick = onGenerateDemoClick,
                     enabled = !isBusy,
                     modifier = Modifier
-                        .height(52.dp)
+                        .fillMaxWidth()
+                        .height(48.dp)
                         .testTag("btn_generate_demo"),
                     shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.7f))
@@ -687,7 +634,7 @@ private fun ActionAndStatusConsole(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "Converter HD e Postar Direto no Status",
+                                text = "Converter e compartilhar",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
@@ -708,7 +655,7 @@ private fun ActionAndStatusConsole(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Apenas Converter e Salvar na Galeria",
+                                text = "Converter e salvar",
                                 style = MaterialTheme.typography.labelLarge
                             )
                         }
@@ -882,7 +829,7 @@ private fun GalleryHistorySectionHeader(
                 tint = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = "Vídeos Convertidos (Filmes/StatusHD)",
+                text = "Vídeos convertidos",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onBackground
             )
@@ -925,12 +872,12 @@ private fun EmptyHistoryCard(modifier: Modifier = Modifier) {
                 modifier = Modifier.size(40.dp)
             )
             Text(
-                text = "Nenhum vídeo StatusHD exportado ainda",
+                text = "Nenhum vídeo convertido ainda",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Selecione um vídeo da galeria ou gere o Clipe Teste 1080p para criar seu primeiro vídeo otimizado em Filmes/StatusHD.",
+                text = "Selecione um vídeo para começar. Seus vídeos convertidos aparecerão aqui.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

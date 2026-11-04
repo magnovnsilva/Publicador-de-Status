@@ -144,7 +144,7 @@ fun VideoStagePlayerCard(
                     Column {
                         Text(
                             text = if (previewProcessedOutput && latestEncodedVideo != null) {
-                                "Saída Codificada StatusHD"
+                                "Vídeo convertido"
                             } else {
                                 "Monitor Vertical 9:16 (${config.preset.targetWidth}×${config.preset.targetHeight})"
                             },
@@ -177,7 +177,7 @@ fun VideoStagePlayerCard(
                         FilterChip(
                             selected = previewProcessedOutput,
                             onClick = { onTogglePreviewMode(true) },
-                            label = { Text("Status HD", style = MaterialTheme.typography.labelSmall) },
+                            label = { Text("Convertido", style = MaterialTheme.typography.labelSmall) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                 selectedLabelColor = MaterialTheme.colorScheme.primary
@@ -311,7 +311,7 @@ fun VideoStagePlayerCard(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Padrão Venlow Anti-Compressão",
+                            text = "Prévia da conversão",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -331,7 +331,7 @@ fun VideoStagePlayerCard(
                         value = "${selectedVideo.formattedResolution} • ${selectedVideo.formattedSizeMb}"
                     )
                     TelemetryChip(
-                        label = "SAÍDA VENLOW",
+                        label = "VÍDEO CONVERTIDO",
                         value = if (latestEncodedVideo != null) {
                             "${latestEncodedVideo.width}×${latestEncodedVideo.height} • ${latestEncodedVideo.formattedSizeMb}"
                         } else {
